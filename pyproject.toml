@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "open-buddy"
+version = "0.1.0"
+description = "Multi-agent hardware buddy for M5Stack StickS3"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+open-buddy = "bridge.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bridge*"]
