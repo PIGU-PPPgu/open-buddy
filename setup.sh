@@ -41,6 +41,10 @@ cp "$BUDDY_DIR/voice-helper-new" "$APP_BUNDLE/Contents/MacOS/VoiceHelper"
 chmod +x "$APP_BUNDLE/Contents/MacOS/VoiceHelper"
 cp "$BUDDY_DIR/voice-helper-new" "$BUDDY_DIR/voice-helper"
 
+# Re-sign the app bundle so macOS accepts it (ad-hoc signature, no Apple ID needed)
+codesign --force --deep --sign - "$APP_BUNDLE" \
+  || die "codesign failed"
+
 cat > "$APP_BUNDLE/Contents/Info.plist" << 'INFOPLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

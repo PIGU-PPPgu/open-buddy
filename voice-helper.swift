@@ -163,8 +163,20 @@ class DictationPillView: NSView {
 }
 
 // ── Typing via CGEvent ────────────────────────────────────────────────────────
+func checkAccessibility() -> Bool {
+    let trusted = AXIsProcessTrusted()
+    if !trusted {
+        log("Accessibility not granted — CGEvent typing will fail. Open System Settings > Privacy > Accessibility and add VoiceHelper.")
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        }
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+    }
+    return trusted
+}
+
 func typeString(_ text: String) {
-    log("typing: \(text)")
+    guard checkAccessibility() else { return }
     // Find frontmost app for logging
     if let front = NSWorkspace.shared.frontmostApplication {
         log("frontmost: \(front.bundleIdentifier ?? front.localizedName ?? "?")")
@@ -256,7 +268,8 @@ class Recognizer: NSObject, SFSpeechRecognizerDelegate {
         isRecording = false
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
-        request?.endAudio()  // signals end of audio; task will fire isFinal result
+        request?.endAudio()  // signals end of audio stream
+        task?.finish()       // explicitly finish task so isFinal result is guaranteed
         overlay.hide()
         log("recording stopped")
     }
@@ -271,13 +284,13 @@ func handleCommand(_ cmd: String) {
     if c == "start" {
         recognizer.start { text in
             guard !text.isEmpty else { return }
-            // Hide overlay on main runloop
+            // Hide overlay on main runloop and wait for it to complete
             CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
                 overlay.hide()
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())
-            // Type after a short delay (let focus return to original app)
-            Thread.sleep(forTimeInterval: 0.2)
+            // Give focus time to return to original app (overlay teardown + window activation)
+            Thread.sleep(forTimeInterval: 0.5)
             typeString(text)
         }
     } else if c == "stop" {
@@ -305,6 +318,13 @@ if CommandLine.arguments.contains("--request-permissions") {
             print("Microphone: ✗ \(error)")
         }
         print("Permissions done. Re-run without --request-permissions to start the daemon.")
+        // Check Accessibility (needed for CGEvent keyboard simulation)
+        if AXIsProcessTrusted() {
+            print("Accessibility: ✓ authorized")
+        } else {
+            print("Accessibility: ✗ not granted — open System Settings > Privacy > Accessibility and add VoiceHelper.app")
+            print("  Without this, voice text will NOT be typed into apps.")
+        }
         exit(0)
     }
     app.run()
