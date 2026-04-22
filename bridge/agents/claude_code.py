@@ -56,20 +56,49 @@ class ClaudeCodeAdapter:
 
         elif hook == "PreToolUse":
             tool = event.get("tool_name", "")
+            tool_input = event.get("tool_input", {})
+            # Build a short display message
+            if isinstance(tool_input, dict):
+                # Show the most meaningful field: command, file_path, description, etc.
+                hint = (
+                    tool_input.get("command")
+                    or tool_input.get("file_path")
+                    or tool_input.get("description")
+                    or tool_input.get("query")
+                    or ""
+                )
+                msg = f"{tool}: {str(hint)[:80]}" if hint else tool
+            else:
+                msg = tool
             # Permission tools trigger attention state
             if "permission" in tool.lower() or tool in ("Bash", "Write", "Edit"):
-                prompt = f"{tool}: {json.dumps(event.get('tool_input', {}))[:120]}"
-                self._router.on_attention(session_id, prompt)
+                self._router.on_attention(session_id, msg)
             else:
-                self._router.on_busy(session_id)
+                self._router.on_busy(session_id, msg)
 
         elif hook == "PostToolUse":
-            self._router.on_busy(session_id)
+            tool = event.get("tool_name", "")
+            self._router.on_busy(session_id, f"✓ {tool}")
 
         elif hook == "Stop":
             reason = event.get("stop_reason", "")
+            # Try to grab the last assistant text from transcript
+            transcript = event.get("transcript", [])
+            last_text = ""
+            for msg in reversed(transcript):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        last_text = content[:200]
+                    elif isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                last_text = block.get("text", "")[:200]
+                                break
+                    if last_text:
+                        break
             if reason == "end_turn":
-                self._router.on_celebrate(session_id)
+                self._router.on_celebrate(session_id, last_text)
             self._router.on_session_stop(session_id)
 
         elif hook == "Notification":

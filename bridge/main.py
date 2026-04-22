@@ -14,6 +14,7 @@ from .agents.claude_code import ClaudeCodeAdapter
 from .agents.codex import CodexAdapter
 from .agents.openclaw import OpenClawAdapter
 from .agents.hermes import HermesAdapter
+from .voice import trigger_macos_dictation
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,11 @@ async def run(device_id: str) -> None:
     router = Router()
     ble = BLEBridge(device_id)
 
+    def on_btn(action: str) -> None:
+        asyncio.create_task(_handle_btn(action, ble))
+
+    ble.set_btn_callback(on_btn)
+
     adapters = [
         ClaudeCodeAdapter(router),
         CodexAdapter(router),
@@ -33,16 +39,16 @@ async def run(device_id: str) -> None:
 
     adapter_tasks = [asyncio.create_task(a.serve()) for a in adapters]
 
-    last_state: tuple = (None, None, None)
+    last_state: tuple = (None, None, None, None)
     try:
         while True:
             current = router.resolve()
             if current != last_state:
-                state, agent, prompt = current
+                state, agent, prompt, last_msg = current
                 state_name = state.name.lower()
                 log.info("state → %s [%s]", state_name, agent or "—")
                 try:
-                    await ble.push_state(state_name, agent, prompt)
+                    await ble.push_state(state_name, agent, prompt, last_msg)
                     last_state = current
                 except Exception as exc:
                     log.debug("BLE push skipped: %s", exc)
@@ -50,6 +56,14 @@ async def run(device_id: str) -> None:
     finally:
         for t in adapter_tasks:
             t.cancel()
+
+
+async def _handle_btn(action: str, ble: BLEBridge) -> None:
+    log.info("btn: %s", action)
+    if action == "voice_start":
+        await trigger_macos_dictation()
+    elif action == "voice_stop":
+        await trigger_macos_dictation()  # second Fn Fn stops dictation
 
 
 def main() -> None:

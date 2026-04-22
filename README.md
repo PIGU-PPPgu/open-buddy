@@ -1,16 +1,23 @@
 # open-buddy
 
-A multi-agent hardware buddy for M5Stack StickS3.
+A multi-agent hardware buddy for M5Stack StickS3, built on top of [CodeBuddy](https://github.com/CharlexH/CodeBuddy).
 
-Supports **Claude Code**, **Codex**, **OpenClaw**, **Hermes** and more — all at once.
-When multiple agents are running, the device always shows what needs your attention most.
+While CodeBuddy supports a single agent (Codex), open-buddy extends it to watch **Claude Code, Codex, OpenClaw, and Hermes simultaneously** — always surfacing what needs your attention most.
 
-## Features
+## What's new vs CodeBuddy
 
-- **Multi-agent priority display** — attention > busy > idle, with agent name shown
-- **Sound alerts** — distinct tones for approval requests, task complete, errors
-- **Mute mode** — toggle silence from the device menu
-- **BLE bridge** — macOS daemon connects all agents to the device over Bluetooth
+| | CodeBuddy | open-buddy |
+|---|---|---|
+| Agents | Codex only | Claude Code, Codex, OpenClaw, Hermes |
+| Priority logic | Single session | Multi-agent: attention > busy > idle |
+| Agent label | — | Active agent shown on device (cc / codex / claw / hermes) |
+| Sound alerts | — | Distinct tones: approval / complete / error / mute |
+| Mute mode | — | Toggle from device menu |
+| BLE transport | CodeBuddyBLEHelper.app | Direct Python bleak — no helper app needed |
+| macOS autostart | Manual | launchd service, starts at login |
+| Hook installer | Manual | `open-buddy hooks install` auto-injects all agent configs |
+
+Firmware is a fork of CodeBuddy's — same wire protocol, same display logic, with additions for agent labels and sound events.
 
 ## Hardware
 
@@ -20,37 +27,47 @@ M5Stack StickS3 (ESP32-S3)
 
 ### 1. Flash firmware
 
-Download `open-buddy-sticks3-vX.X.X-full.bin` from [Releases](https://github.com/PIGU-PPPgu/open-buddy/releases) and flash:
+Use [PlatformIO](https://platformio.org/):
 
 ```bash
-esptool --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 460800 \
-  write_flash 0x0 open-buddy-sticks3-vX.X.X-full.bin
+cd firmware
+pio run --target upload
 ```
+
+Or download a pre-built `.bin` from [Releases](https://github.com/PIGU-PPPgu/open-buddy/releases) and flash with M5Burner.
 
 ### 2. Install bridge
 
 ```bash
 pip install open-buddy
-open-buddy pair
-open-buddy agent &
 ```
 
 ### 3. Install agent hooks
 
 ```bash
-open-buddy hooks install --all   # installs for all detected agents
-open-buddy hooks install --cc    # Claude Code only
-open-buddy hooks install --codex # Codex only
+open-buddy hooks install          # all agents
+open-buddy hooks install --agent cc      # Claude Code only
+open-buddy hooks install --agent codex   # Codex only
+open-buddy hooks install --agent claw    # OpenClaw only
+open-buddy hooks install --agent hermes  # Hermes (prints webhook URL)
 ```
+
+### 4. Start bridge
+
+```bash
+open-buddy run --device <BLE-UUID>
+```
+
+To run at login (macOS), add a launchd plist pointing to `open-buddy run --device <UUID>`.
 
 ## Agent Support
 
-| Agent | Status | Hook path |
-|-------|--------|-----------|
-| Claude Code | Planned | `~/.claude/settings.json` |
-| Codex | Planned | `~/.codex/config.toml` |
-| OpenClaw | Planned | `~/.openclaw/settings.json` |
-| Hermes | Planned | `~/.hermes/settings.json` |
+| Agent | Status | Config |
+|-------|--------|--------|
+| Claude Code | ✅ | `~/.claude/settings.json` |
+| Codex | ✅ | `~/.codex/config.toml` |
+| OpenClaw | ✅ | `~/.openclaw/settings.json` |
+| Hermes | ✅ | `hermes webhook add http://localhost:7779/hermes` |
 
 ## Device States
 
@@ -67,37 +84,35 @@ open-buddy hooks install --codex # Codex only
 
 | Event | Sound |
 |-------|-------|
-| Approval needed | Alert tone (repeating) |
-| Task complete | Success chime |
-| Error / denied | Low buzz |
+| Approval needed | Two-tone alert |
+| Task complete | Rising chime |
+| Error / denied | Low descending buzz |
 | Mute toggled | Single click |
 
 ## Controls
 
 | Button | Action |
 |--------|--------|
-| A (front) | Approve / next screen |
-| B (right) | Deny / scroll |
+| A (front) | Approve prompt / next screen |
+| B (right side) | Deny prompt / scroll / next page |
 | Hold A | Menu |
-| Power short | Toggle screen |
+| Power (short) | Toggle screen |
 | Face down | Nap mode |
 
 ## Architecture
 
 ```
 Claude Code ──┐
-Codex        ──┤ hooks → open-buddy agent (macOS) ──BLE──> StickS3
-OpenClaw     ──┤
-Hermes       ──┘
+Codex        ──┤  Unix sockets / HTTP  ┌─ priority router ─── BLE ──> StickS3
+OpenClaw     ──┤ ────────────────────> │   (attention > busy > idle)
+Hermes       ──┘                       └─ state push loop (0.5s)
 ```
 
-The bridge runs as a macOS background agent. Each coding agent fires hooks on
-session start, tool use, approval requests, and stop. The bridge aggregates
-all events, applies priority logic, and pushes state to the device over BLE.
+The bridge runs as a background process. Each agent fires hooks on session start, tool use, approval requests, and stop. The router aggregates all sessions, picks the highest-priority state, and pushes it to the device over BLE (Nordic UART Service).
 
-## Contributing
+## Credits
 
-PRs welcome. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internals.
+Firmware and BLE wire protocol based on [CodeBuddy](https://github.com/CharlexH/CodeBuddy) by CharlexH.
 
 ## License
 

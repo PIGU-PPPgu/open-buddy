@@ -1,6 +1,7 @@
 #include "board_compat.h"
 #include <LittleFS.h>
 #include <stdarg.h>
+#include <math.h>
 #include "ble_bridge.h"
 #include "about_info.h"
 #include "clock_display_logic.h"
@@ -95,6 +96,16 @@ const uint32_t SCREEN_OFF_MS = 30000;
 bool     napping = false;
 uint32_t napStartMs = 0;
 uint32_t promptArrivedMs = 0;
+
+// Voice input state
+enum VoiceState { VOICE_OFF, VOICE_LISTENING, VOICE_THINKING };
+VoiceState voiceState = VOICE_OFF;
+uint32_t   voiceAnimMs = 0;
+int        voiceStateFromBridge = -1;  // -1 = no update pending
+
+// Double-click detection for BtnB
+uint32_t btnBLastTapMs = 0;
+bool     btnBWaitSecond = false;
 
 // Face-down = Z-axis dominant and negative. Debounced so a toss doesn't count.
 static bool isFaceDown() {
@@ -979,14 +990,56 @@ void drawHUD() {
   const Palette& p = characterPalette();
   const int SHOW = 3, LH = 12, WIDTH = 20;
   const int AREA = SHOW * LH + 4;
-  spr.fillRect(0, H - AREA, W, AREA, p.bg);
+  // Lower half = rows H/2..H
+  const int LOWER_TOP = H / 2;
+  const int LOWER_H   = H - LOWER_TOP;
+  spr.fillRect(0, LOWER_TOP, W, LOWER_H, p.bg);
   spr.setTextSize(1);
 
-  // Agent label: dim, right-aligned, bottom-right corner of HUD
+  // Voice overlay: brief animation while macOS dictation is launching
+  if (voiceState != VOICE_OFF) {
+    uint32_t elapsed = millis() - voiceAnimMs;
+    uint8_t dots = (elapsed / 300) % 4;
+    char label[8] = "MIC ";
+    for (uint8_t i = 0; i < dots; i++) label[4 + i] = '.';
+    label[4 + dots] = 0;
+    spr.setTextSize(3);
+    int lw = strlen(label) * 6 * 3;
+    spr.setTextColor(0x07FF, p.bg);  // cyan
+    spr.setCursor((W - lw) / 2, LOWER_TOP + (LOWER_H - 24) / 2);
+    spr.print(label);
+    spr.setTextSize(1);
+    // Animated bars
+    for (int i = 0; i < 5; i++) {
+      float phase = (elapsed / 200.0f) + i * 0.8f;
+      int bh = 4 + (int)(8 * fabsf(sinf(phase)));
+      int bx = (W / 2) - 14 + i * 7;
+      spr.fillRect(bx, H - 8 - bh, 5, bh, 0x07FF);
+    }
+    return;
+  }
+  spr.fillRect(0, LOWER_TOP, W, LOWER_H, p.bg);
+  spr.setTextSize(1);
+
+  // Agent label: large pixelated watermark filling the lower half of screen
   if (tama.agentLabel[0]) {
+    int labelLen = (int)strlen(tama.agentLabel);
+    // Fit horizontally: each char is 6px wide at size 1
+    int szW = (W - 4) / (labelLen * 6);
+    // Fit vertically: each char is 8px tall at size 1
+    int szH = (LOWER_H - 4) / 8;
+    int sz = szW < szH ? szW : szH;
+    if (sz < 1) sz = 1;
+    if (sz > 6) sz = 6;  // cap: don't fill the whole half, leave room for text
+    int lw = labelLen * 6 * sz;
+    int lh = 8 * sz;
+    int lx = (W - lw) / 2;
+    int ly = LOWER_TOP + (LOWER_H - lh) / 2;
+    spr.setTextSize(sz);
     spr.setTextColor(p.textDim, p.bg);
-    spr.setCursor(W - (int)strlen(tama.agentLabel) * 6 - 2, H - LH - 1);
+    spr.setCursor(lx, ly);
     spr.print(tama.agentLabel);
+    spr.setTextSize(1);
   }
 
   if (tama.lineGen != lastLineGen) {
@@ -995,6 +1048,9 @@ void drawHUD() {
     hudScrollStartedMs = millis();
     wake();
   }
+
+  // How many lines fit in the lower half
+  const int SHOW_LOWER = LOWER_H / LH;
 
   if (tama.nLines == 0) {
     char msgLine[48];
@@ -1018,18 +1074,18 @@ void drawHUD() {
     nDisp += got;
   }
 
-  uint8_t maxBack = (nDisp > SHOW) ? (nDisp - SHOW) : 0;
+  uint8_t maxBack = (nDisp > SHOW_LOWER) ? (nDisp - SHOW_LOWER) : 0;
   msgScroll = utf8AutoScrollOffset(maxBack, millis() - hudScrollStartedMs);
 
   int end = (int)nDisp - msgScroll;
-  int start = end - SHOW; if (start < 0) start = 0;
+  int start = end - SHOW_LOWER; if (start < 0) start = 0;
   uint8_t newest = tama.nLines - 1;
   for (int i = 0; start + i < end; i++) {
     uint8_t row = start + i;
     bool fresh = (srcOf[row] == newest) && (msgScroll == 0);
     spr.setTextColor(fresh ? p.text : p.textDim, p.bg);
     useUtf8FontForText(spr, disp[row], &fonts::efontCN_12);
-    spr.setCursor(4, H - AREA + 2 + i * LH);
+    spr.setCursor(4, LOWER_TOP + 2 + i * LH);
     spr.print(disp[row]);
   }
   useDefaultTextFont(spr);
@@ -1105,6 +1161,12 @@ void loop() {
   uint32_t now = millis();
 
   dataPoll(&tama);
+  // Sync voice state from bridge (set by data.h _applyJson)
+  if (voiceStateFromBridge >= 0) {
+    voiceState = (VoiceState)voiceStateFromBridge;
+    if (voiceStateFromBridge > 0) voiceAnimMs = millis();
+    voiceStateFromBridge = -1;
+  }
   if (statsPollLevelUp()) triggerOneShot(P_CELEBRATE, 3000);
   baseState = derive(tama);
 
@@ -1260,11 +1322,10 @@ void loop() {
     swallowBtnA = false;
   }
 
-  // BtnB: pet → heart
+  // BtnB: double-tap = voice toggle; single tap = scroll/page/deny
   if (M5.BtnB.wasPressed()) {
     if (swallowBtnB) { swallowBtnB = false; }
-    else
-    if (inPrompt) {
+    else if (inPrompt) {
       char cmd[96];
       snprintf(cmd, sizeof(cmd), "{\"cmd\":\"permission\",\"id\":\"%s\",\"decision\":\"deny\"}", tama.promptId);
       Serial.printf("[prompt] deny id=%s\n", tama.promptId);
@@ -1281,17 +1342,43 @@ void loop() {
     } else if (menuOpen) {
       beep(2400, 30);
       menuConfirm();
-    } else if (displayMode == DISP_INFO) {
-      beep(2400, 30);
-      infoPage = (infoPage + 1) % INFO_PAGES;
-    } else if (displayMode == DISP_PET) {
-      beep(2400, 30);
-      petPage = (petPage + 1) % PET_PAGES;
-      applyDisplayMode();
     } else {
-      beep(2400, 30);
-      msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
+      // Double-click detection: two taps within 400ms
+      uint32_t now = millis();
+      if (btnBWaitSecond && (now - btnBLastTapMs) < 400) {
+        // Second tap — toggle voice on/off
+        btnBWaitSecond = false;
+        if (voiceState == VOICE_OFF) {
+          voiceState = VOICE_LISTENING;
+          voiceAnimMs = now;
+          beep(1800, 40); beep(2200, 40);
+          bleWrite((const uint8_t*)"{\"type\":\"btn\",\"action\":\"voice_start\"}\n", 38);
+        } else {
+          voiceState = VOICE_OFF;
+          beep(2200, 40); beep(1800, 40);
+          bleWrite((const uint8_t*)"{\"type\":\"btn\",\"action\":\"voice_stop\"}\n", 37);
+        }
+      } else {
+        // First tap — start window, also do normal single-tap action
+        btnBLastTapMs = now;
+        btnBWaitSecond = true;
+        if (displayMode == DISP_INFO) {
+          beep(2400, 30);
+          infoPage = (infoPage + 1) % INFO_PAGES;
+        } else if (displayMode == DISP_PET) {
+          beep(2400, 30);
+          petPage = (petPage + 1) % PET_PAGES;
+          applyDisplayMode();
+        } else {
+          beep(2400, 30);
+          msgScroll = (msgScroll >= 30) ? 0 : msgScroll + 1;
+        }
+      }
     }
+  }
+  // Expire double-click window
+  if (btnBWaitSecond && (millis() - btnBLastTapMs) >= 400) {
+    btnBWaitSecond = false;
   }
 
   // blink bookkeeping

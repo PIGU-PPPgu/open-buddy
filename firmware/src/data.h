@@ -93,6 +93,20 @@ static void _applyJson(const char* line, TamaState* out) {
     return;
   }
 
+  // Voice state updates: {"type":"voice","state":"listening"|"thinking"|"done"}
+  if (dtype && strcmp(dtype, "voice") == 0) {
+    const char* vs = doc["state"] | "";
+    // Store in a simple global int: 0=off 1=listening 2=thinking
+    // main.cpp reads this via voiceStateFromBridge
+    extern int voiceStateFromBridge;
+    extern uint32_t voiceAnimMs;
+    if      (strcmp(vs, "listening") == 0) { voiceStateFromBridge = 1; voiceAnimMs = millis(); }
+    else if (strcmp(vs, "thinking")  == 0) { voiceStateFromBridge = 2; voiceAnimMs = millis(); }
+    else if (strcmp(vs, "done")      == 0) { voiceStateFromBridge = 0; }
+    _lastLiveMs = millis();
+    return;
+  }
+
   // Bridge sends {"time":[epoch_sec, tz_offset_sec]}; gmtime_r on the
   // adjusted epoch yields local components including weekday.
   JsonArray t = doc["time"];

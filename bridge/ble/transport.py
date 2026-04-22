@@ -9,7 +9,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Optional
+from typing import Optional, Callable
 
 from bleak import BleakClient, BleakScanner
 
@@ -30,10 +30,12 @@ class BLEBridge:
         self._device_id = device_id
         self._mute = False
         self._client: Optional[BleakClient] = None
+        self._btn_callback: Optional[Callable[[str], None]] = None
+        self._rx_buf = ""
 
-    @property
-    def mute(self) -> bool:
-        return self._mute
+    def set_btn_callback(self, cb: Callable[[str], None]) -> None:
+        """Called with action string when device sends a button event."""
+        self._btn_callback = cb
 
     async def connect(self) -> None:
         if self._client and self._client.is_connected:
@@ -42,9 +44,30 @@ class BLEBridge:
         client = BleakClient(self._device_id, disconnected_callback=self._on_disconnect)
         await client.connect(timeout=20.0)
         self._client = client
+        # Subscribe to TX notifications (device → Mac)
+        await client.start_notify(NUS_TX_UUID, self._on_notify)
         owner = os.environ.get("USER", "open-buddy")[:31]
         await self._write_json({"cmd": "owner", "name": owner})
         log.info("BLE connected to %s", self._device_id)
+
+    @property
+    def mute(self) -> bool:
+        return self._mute
+
+    def _on_notify(self, _handle: int, data: bytes) -> None:
+        """Handle TX notifications from device (button events etc.)"""
+        self._rx_buf += data.decode("utf-8", errors="replace")
+        while "\n" in self._rx_buf:
+            line, self._rx_buf = self._rx_buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                if msg.get("type") == "btn" and self._btn_callback:
+                    self._btn_callback(msg.get("action", ""))
+            except Exception:
+                pass
 
     async def disconnect(self) -> None:
         if self._client:
@@ -65,13 +88,21 @@ class BLEBridge:
         state: str,
         agent: str,
         approval_prompt: Optional[str] = None,
+        last_msg: str = "",
     ) -> None:
         await self._ensure_connected()
 
         running = 1 if state in ("busy", "attention", "celebrate") else 0
         waiting = 1 if state == "attention" else 0
 
-        await self._write_json({
+        # Build entries: show last_msg if available, else just agent tag
+        entries: list[str] = []
+        if last_msg:
+            entries = [last_msg[:200]]
+        elif agent:
+            entries = [f"[{agent}]"]
+
+        payload: dict = {
             "type": "snapshot",
             "running": running,
             "waiting": waiting,
@@ -79,16 +110,21 @@ class BLEBridge:
             "tokens": 0,
             "tokens_today": 0,
             "agent": agent,
-            "msg": f"[{agent}] {approval_prompt or ''}"[:80] if agent else "",
-            "entries": [f"[{agent}]"] if agent else [],
-        })
+            "msg": last_msg[:80] if last_msg else (f"[{agent}]" if agent else ""),
+            "entries": entries,
+        }
 
         if state == "attention" and approval_prompt:
-            await self._write_json({
-                "type": "permission",
-                "prompt": approval_prompt[:200],
-                "agent": agent,
-            })
+            # Embed prompt inline so firmware's _applyJson picks it up in one pass
+            payload["prompt"] = {
+                "id": "bridge-approval",
+                "tool": approval_prompt[:80],
+                "hint": approval_prompt[:200],
+            }
+
+        await self._write_json(payload)
+
+        if state == "attention" and approval_prompt:
             if not self._mute:
                 await self._send_sound(SND_ATTENTION)
 

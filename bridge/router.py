@@ -28,6 +28,7 @@ class AgentSession:
     state: State = State.IDLE
     last_active: float = field(default_factory=time.time)
     pending_approval: Optional[str] = None  # approval prompt text if any
+    last_msg: str = ""  # latest status/tool message for display
 
 
 class Router:
@@ -44,15 +45,18 @@ class Router:
         )
         self._touch(session_id)
 
-    def on_busy(self, session_id: str) -> None:
+    def on_busy(self, session_id: str, msg: str = "") -> None:
         if s := self._sessions.get(session_id):
             s.state = State.BUSY
+            if msg:
+                s.last_msg = msg
             self._touch(session_id)
 
     def on_attention(self, session_id: str, prompt: str) -> None:
         if s := self._sessions.get(session_id):
             s.state = State.ATTENTION
             s.pending_approval = prompt
+            s.last_msg = prompt
             self._touch(session_id)
 
     def on_approve(self, session_id: str) -> None:
@@ -61,9 +65,11 @@ class Router:
             s.pending_approval = None
             self._touch(session_id)
 
-    def on_celebrate(self, session_id: str) -> None:
+    def on_celebrate(self, session_id: str, msg: str = "") -> None:
         if s := self._sessions.get(session_id):
             s.state = State.CELEBRATE
+            if msg:
+                s.last_msg = msg
             self._touch(session_id)
 
     def on_session_stop(self, session_id: str) -> None:
@@ -73,13 +79,13 @@ class Router:
     # Priority resolution
     # ------------------------------------------------------------------
 
-    def resolve(self) -> tuple[State, str, Optional[str]]:
+    def resolve(self) -> tuple[State, str, Optional[str], str]:
         """
-        Returns (state, agent_label, approval_prompt).
+        Returns (state, agent_label, approval_prompt, last_msg).
         agent_label is empty string when no sessions exist.
         """
         if not self._sessions:
-            return State.SLEEP, "", None
+            return State.SLEEP, "", None, ""
 
         # Sort by priority desc, then last_active desc
         ranked = sorted(
@@ -88,7 +94,7 @@ class Router:
             reverse=True,
         )
         top = ranked[0]
-        return top.state, top.agent, top.pending_approval
+        return top.state, top.agent, top.pending_approval, top.last_msg
 
     # ------------------------------------------------------------------
 
