@@ -12,6 +12,8 @@ from .router import Router, State
 from .ble.transport import BLEBridge
 from .agents.claude_code import ClaudeCodeAdapter
 from .agents.codex import CodexAdapter
+from .agents.openclaw import OpenClawAdapter
+from .agents.hermes import HermesAdapter
 
 log = logging.getLogger(__name__)
 
@@ -25,14 +27,12 @@ async def run(device_id: str) -> None:
     adapters = [
         ClaudeCodeAdapter(router),
         CodexAdapter(router),
-        # OpenClawAdapter(router),  # TODO
-        # HermesAdapter(router),    # TODO
+        OpenClawAdapter(router),
+        HermesAdapter(router),
     ]
 
-    # Start all adapters concurrently
     adapter_tasks = [asyncio.create_task(a.serve()) for a in adapters]
 
-    # State push loop
     last_state: tuple = (None, None, None)
     try:
         while True:
@@ -52,15 +52,56 @@ async def run(device_id: str) -> None:
 def main() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="open-buddy bridge")
-    parser.add_argument("--device", required=True, help="BLE device UUID")
-    parser.add_argument("--debug", action="store_true")
+    sub = parser.add_subparsers(dest="cmd")
+
+    # run subcommand
+    run_p = sub.add_parser("run", help="Start the bridge daemon")
+    run_p.add_argument("--device", required=True, help="BLE device UUID")
+    run_p.add_argument("--debug", action="store_true")
+
+    # hooks subcommand
+    hooks_p = sub.add_parser("hooks", help="Manage agent hook configs")
+    hooks_sub = hooks_p.add_subparsers(dest="hooks_cmd")
+    install_p = hooks_sub.add_parser("install", help="Install hooks into all agent configs")
+    install_p.add_argument(
+        "--agent",
+        choices=["all", "cc", "claw", "codex", "hermes"],
+        default="all",
+    )
+
+    # Legacy: bare --device flag for backwards compat
+    parser.add_argument("--device", help=argparse.SUPPRESS)
+    parser.add_argument("--debug", action="store_true", help=argparse.SUPPRESS)
+
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    asyncio.run(run(args.device))
+    # Legacy invocation: open-buddy --device <uuid>
+    if args.cmd is None and args.device:
+        args.cmd = "run"
+
+    if args.cmd == "run" or (args.cmd is None and args.device):
+        logging.basicConfig(
+            level=logging.DEBUG if args.debug else logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+        asyncio.run(run(args.device))
+
+    elif args.cmd == "hooks" and args.hooks_cmd == "install":
+        from .hooks_installer import (
+            install_all, install_claude_code, install_openclaw,
+            install_codex, install_hermes,
+        )
+        dispatch = {
+            "all": install_all,
+            "cc": install_claude_code,
+            "claw": install_openclaw,
+            "codex": install_codex,
+            "hermes": install_hermes,
+        }
+        dispatch[args.agent]()
+
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
