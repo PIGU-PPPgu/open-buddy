@@ -996,25 +996,44 @@ void drawHUD() {
   spr.fillRect(0, LOWER_TOP, W, LOWER_H, p.bg);
   spr.setTextSize(1);
 
-  // Voice overlay: brief animation while macOS dictation is launching
+  // Voice overlay: macOS-style green pill with mic icon + animated dots
   if (voiceState != VOICE_OFF) {
     uint32_t elapsed = millis() - voiceAnimMs;
-    uint8_t dots = (elapsed / 300) % 4;
-    char label[8] = "MIC ";
-    for (uint8_t i = 0; i < dots; i++) label[4 + i] = '.';
-    label[4 + dots] = 0;
-    spr.setTextSize(3);
-    int lw = strlen(label) * 6 * 3;
-    spr.setTextColor(0x07FF, p.bg);  // cyan
-    spr.setCursor((W - lw) / 2, LOWER_TOP + (LOWER_H - 24) / 2);
-    spr.print(label);
-    spr.setTextSize(1);
-    // Animated bars
-    for (int i = 0; i < 5; i++) {
-      float phase = (elapsed / 200.0f) + i * 0.8f;
-      int bh = 4 + (int)(8 * fabsf(sinf(phase)));
-      int bx = (W / 2) - 14 + i * 7;
-      spr.fillRect(bx, H - 8 - bh, 5, bh, 0x07FF);
+    // Pill dimensions
+    const int PW = 80, PH = 28;
+    const int PX = (W - PW) / 2;
+    const int PY = LOWER_TOP + (LOWER_H - PH) / 2;
+    const uint16_t GREEN = 0x07E0;
+    const uint16_t WHITE = 0xFFFF;
+    // Draw green rounded pill
+    spr.fillRoundRect(PX, PY, PW, PH, PH / 2, GREEN);
+    // Mic icon (pixel art, 9x13, centered in pill)
+    const int MX = PX + (PW - 9) / 2;
+    const int MY = PY + (PH - 13) / 2;
+    // Mic body: 5px wide, 8px tall capsule
+    spr.fillRoundRect(MX + 2, MY, 5, 8, 2, WHITE);
+    // Mic stand: 1px wide vertical line
+    spr.fillRect(MX + 4, MY + 8, 1, 3, WHITE);
+    // Mic base: 5px wide horizontal line
+    spr.fillRect(MX + 2, MY + 11, 5, 1, WHITE);
+    // Mic arc: 9px wide arc (3 pixels)
+    spr.fillRect(MX,     MY + 5, 1, 3, WHITE);
+    spr.fillRect(MX + 8, MY + 5, 1, 3, WHITE);
+    spr.fillRect(MX + 1, MY + 8, 1, 1, WHITE);
+    spr.fillRect(MX + 7, MY + 8, 1, 1, WHITE);
+    // Animated dots on left and right of mic
+    uint8_t phase = (elapsed / 250) % 4;  // 0..3 cycling
+    // Left dots (2 dots, rightmost is closest to mic)
+    for (int d = 0; d < 2; d++) {
+      bool lit = (phase >= (uint8_t)(1 - d));
+      uint16_t c = lit ? WHITE : GREEN;
+      spr.fillCircle(PX + 8 + d * 6, PY + PH / 2, 2, c);
+    }
+    // Right dots (2 dots, leftmost is closest to mic)
+    for (int d = 0; d < 2; d++) {
+      bool lit = (phase >= (uint8_t)(1 + d));
+      uint16_t c = lit ? WHITE : GREEN;
+      spr.fillCircle(PX + PW - 8 - d * 6, PY + PH / 2, 2, c);
     }
     return;
   }
