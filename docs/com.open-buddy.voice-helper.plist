@@ -6,7 +6,11 @@
     <string>com.open-buddy.voice-helper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>~/.open-buddy/voice-helper</string>
+        <string>/usr/bin/open</string>
+        <string>-W</string>
+        <string>-n</string>
+        <string>-a</string>
+        <string>/Users/Shared/.open-buddy/VoiceHelper.app</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -18,7 +22,5 @@
     <string>/tmp/open-buddy-voice.log</string>
     <key>ThrottleInterval</key>
     <integer>5</integer>
-    <key>SessionCreate</key>
-    <true/>
 </dict>
 </plist>

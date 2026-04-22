@@ -4,6 +4,7 @@
 set -e
 
 BUDDY_DIR="$HOME/.open-buddy"
+APP_BUNDLE="$BUDDY_DIR/VoiceHelper.app"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -25,14 +26,45 @@ done
 info "Installing Python bridge..."
 pip install -e "$REPO_DIR" --quiet || die "pip install failed"
 
-# ── 2. voice-helper binary ────────────────────────────────────────────────────
+# ── 2. voice-helper binary + app bundle ──────────────────────────────────────
 info "Compiling voice-helper..."
 mkdir -p "$BUDDY_DIR"
-swiftc -O "$REPO_DIR/voice-helper.swift" -o "$BUDDY_DIR/voice-helper" \
+swiftc -O "$REPO_DIR/voice-helper.swift" -o "$BUDDY_DIR/voice-helper-new" \
   -framework Foundation -framework Speech -framework AVFoundation \
   -framework AppKit -framework CoreGraphics \
   || die "swiftc failed — make sure Xcode Command Line Tools are installed (xcode-select --install)"
-info "voice-helper compiled → $BUDDY_DIR/voice-helper"
+
+# Build app bundle (required for TCC microphone/speech permissions)
+info "Creating VoiceHelper.app bundle..."
+mkdir -p "$APP_BUNDLE/Contents/MacOS"
+cp "$BUDDY_DIR/voice-helper-new" "$APP_BUNDLE/Contents/MacOS/VoiceHelper"
+chmod +x "$APP_BUNDLE/Contents/MacOS/VoiceHelper"
+cp "$BUDDY_DIR/voice-helper-new" "$BUDDY_DIR/voice-helper"
+
+cat > "$APP_BUNDLE/Contents/Info.plist" << 'INFOPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.open-buddy.voice-helper</string>
+    <key>CFBundleName</key>
+    <string>VoiceHelper</string>
+    <key>CFBundleExecutable</key>
+    <string>VoiceHelper</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>open-buddy voice input needs microphone access to transcribe speech.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>open-buddy voice input needs speech recognition to transcribe your voice.</string>
+</dict>
+</plist>
+INFOPLIST
+
+info "VoiceHelper.app created → $APP_BUNDLE"
 
 # ── 3. LaunchAgent: voice-helper ──────────────────────────────────────────────
 info "Installing voice-helper LaunchAgent..."
@@ -45,7 +77,11 @@ cat > "$LAUNCH_AGENTS/com.open-buddy.voice-helper.plist" << EOF
     <string>com.open-buddy.voice-helper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>$BUDDY_DIR/voice-helper</string>
+        <string>/usr/bin/open</string>
+        <string>-W</string>
+        <string>-n</string>
+        <string>-a</string>
+        <string>$APP_BUNDLE</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -57,13 +93,13 @@ cat > "$LAUNCH_AGENTS/com.open-buddy.voice-helper.plist" << EOF
     <string>/tmp/open-buddy-voice.log</string>
     <key>ThrottleInterval</key>
     <integer>5</integer>
-    <key>SessionCreate</key>
-    <true/>
 </dict>
 </plist>
 EOF
-launchctl unload "$LAUNCH_AGENTS/com.open-buddy.voice-helper.plist" 2>/dev/null || true
-launchctl load "$LAUNCH_AGENTS/com.open-buddy.voice-helper.plist"
+
+# Use bootout/bootstrap (modern launchctl API)
+launchctl bootout "gui/$(id -u)/com.open-buddy.voice-helper" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/com.open-buddy.voice-helper.plist"
 info "voice-helper started (logs: /tmp/open-buddy-voice.log)"
 
 # ── 4. LaunchAgent: bridge (optional, needs device UUID) ─────────────────────
@@ -99,8 +135,8 @@ if [[ -n "$DEVICE_UUID" ]]; then
 </dict>
 </plist>
 EOF
-  launchctl unload "$LAUNCH_AGENTS/com.open-buddy.bridge.plist" 2>/dev/null || true
-  launchctl load "$LAUNCH_AGENTS/com.open-buddy.bridge.plist"
+  launchctl bootout "gui/$(id -u)/com.open-buddy.bridge" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENTS/com.open-buddy.bridge.plist"
   info "bridge started (logs: /tmp/open-buddy.log)"
 else
   warn "No --device UUID given. Bridge not auto-started."
@@ -112,7 +148,7 @@ fi
 info "Installing agent hooks..."
 open-buddy hooks install 2>/dev/null || warn "hooks install skipped (run manually: open-buddy hooks install)"
 
-# ── 6. Permissions prompt ─────────────────────────────────────────────────────
+# ── 6. Permissions (one-time TCC authorization) ───────────────────────────────
 echo ""
 info "Requesting macOS permissions (one-time)..."
 echo ""
@@ -123,16 +159,19 @@ echo ""
 echo "  Please click Allow on both."
 echo ""
 
-# Trigger permission requests by sending a test start command
-# voice-helper will call SFSpeechRecognizer.requestAuthorization internally
-sleep 1
+# Wait for socket to be ready
+for i in $(seq 1 10); do
+  [[ -S "$BUDDY_DIR/voice.sock" ]] && break
+  sleep 1
+done
+
 if [[ -S "$BUDDY_DIR/voice.sock" ]]; then
   echo -n "start" | nc -U "$BUDDY_DIR/voice.sock" 2>/dev/null || true
-  sleep 2
+  sleep 3
   echo -n "stop"  | nc -U "$BUDDY_DIR/voice.sock" 2>/dev/null || true
   info "Permission dialogs triggered — check for popups and click Allow."
 else
-  warn "voice.sock not ready yet — permissions will be requested on first use."
+  warn "voice.sock not ready — permissions will be requested on first use."
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

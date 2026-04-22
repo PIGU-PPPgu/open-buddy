@@ -71,13 +71,19 @@ open-buddy run --device <BLE-UUID>
 
 To run at login, add a launchd plist pointing to `open-buddy run --device <UUID>`.
 
-For voice input, compile and run `voice-helper.swift`:
+For voice input, compile and create the app bundle (required for TCC permissions):
 ```bash
-swiftc -O voice-helper.swift -o ~/.open-buddy/voice-helper \
+mkdir -p ~/.open-buddy/VoiceHelper.app/Contents/MacOS
+swiftc -O voice-helper.swift -o ~/.open-buddy/VoiceHelper.app/Contents/MacOS/VoiceHelper \
   -framework Foundation -framework Speech -framework AVFoundation \
   -framework AppKit -framework CoreGraphics
+# Copy Info.plist into the bundle
+cp docs/VoiceHelper-Info.plist ~/.open-buddy/VoiceHelper.app/Contents/Info.plist
 ```
-Then load `docs/com.open-buddy.voice-helper.plist` via launchctl.
+Then load the LaunchAgent (uses `open -W -n -a` for proper TCC context):
+```bash
+launchctl bootstrap gui/$(id -u) docs/com.open-buddy.voice-helper.plist
+```
 
 </details>
 

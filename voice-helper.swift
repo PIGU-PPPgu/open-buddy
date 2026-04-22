@@ -164,6 +164,11 @@ class DictationPillView: NSView {
 
 // ── Typing via CGEvent ────────────────────────────────────────────────────────
 func typeString(_ text: String) {
+    log("typing: \(text)")
+    // Find frontmost app for logging
+    if let front = NSWorkspace.shared.frontmostApplication {
+        log("frontmost: \(front.bundleIdentifier ?? front.localizedName ?? "?")")
+    }
     let src = CGEventSource(stateID: .hidSystemState)
     for scalar in text.unicodeScalars {
         var u = UniChar(scalar.value & 0xFFFF)
@@ -189,15 +194,32 @@ class Recognizer: NSObject, SFSpeechRecognizerDelegate {
     var onResult: ((String) -> Void)?
 
     func start(completion: @escaping (String) -> Void) {
-        guard !isRecording else { return }
-        SFSpeechRecognizer.requestAuthorization { status in
-            guard status == .authorized else { log("speech auth denied"); return }
-            DispatchQueue.main.async { self._start(completion: completion) }
+        guard !isRecording else { log("already recording"); return }
+        log("start() called, authorizationStatus=\(SFSpeechRecognizer.authorizationStatus().rawValue)")
+        // Always call requestAuthorization — if already granted it returns immediately.
+        // authorizationStatus() can return .notDetermined in launchd context even when
+        // TCC has a record; requestAuthorization() correctly resolves it.
+        SFSpeechRecognizer.requestAuthorization { s in
+            log("requestAuthorization result: \(s.rawValue)")
+            guard s == .authorized else {
+                log("speech auth denied (\(s.rawValue)) — open System Settings > Privacy > Speech Recognition")
+                CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")!)
+                }
+                CFRunLoopWakeUp(CFRunLoopGetMain())
+                return
+            }
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                self._start(completion: completion)
+            }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
     }
 
     private func _start(completion: @escaping (String) -> Void) {
         onResult = completion
+        // Reset engine to clean state
+        audioEngine = AVAudioEngine()
         request = SFSpeechAudioBufferRecognitionRequest()
         request!.shouldReportPartialResults = false
 
@@ -206,16 +228,25 @@ class Recognizer: NSObject, SFSpeechRecognizerDelegate {
         input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { buf, _ in
             self.request?.append(buf)
         }
-        try? audioEngine.start()
+        do {
+            try audioEngine.start()
+        } catch {
+            log("audioEngine start error: \(error)")
+            return
+        }
         isRecording = true
         log("recording started")
         overlay.show()
 
         task = recognizer.recognitionTask(with: request!) { result, error in
-            if let r = result, r.isFinal {
-                let text = r.bestTranscription.formattedString
-                log("transcribed: \(text)")
-                completion(text)
+            if let e = error { log("recognition error: \(e)") }
+            if let r = result {
+                log("recognition result: isFinal=\(r.isFinal) text='\(r.bestTranscription.formattedString)'")
+                if r.isFinal {
+                    let text = r.bestTranscription.formattedString
+                    log("transcribed: \(text)")
+                    completion(text)
+                }
             }
         }
     }
@@ -225,7 +256,7 @@ class Recognizer: NSObject, SFSpeechRecognizerDelegate {
         isRecording = false
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
-        request?.endAudio()
+        request?.endAudio()  // signals end of audio; task will fire isFinal result
         overlay.hide()
         log("recording stopped")
     }
@@ -240,16 +271,44 @@ func handleCommand(_ cmd: String) {
     if c == "start" {
         recognizer.start { text in
             guard !text.isEmpty else { return }
-            DispatchQueue.main.async {
-                // Hide overlay first, then wait briefly for focus to return
+            // Hide overlay on main runloop
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
                 overlay.hide()
-                Thread.sleep(forTimeInterval: 0.15)
-                typeString(text)
             }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
+            // Type after a short delay (let focus return to original app)
+            Thread.sleep(forTimeInterval: 0.2)
+            typeString(text)
         }
     } else if c == "stop" {
         recognizer.stop()
     }
+}
+
+// ── --request-permissions mode (run once from terminal to trigger TCC dialogs) ─
+if CommandLine.arguments.contains("--request-permissions") {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    print("Requesting speech recognition permission...")
+    SFSpeechRecognizer.requestAuthorization { status in
+        print("Speech: \(status == .authorized ? "✓ authorized" : "✗ denied (\(status.rawValue))")")
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let fmt = input.outputFormat(forBus: 0)
+        input.installTap(onBus: 0, bufferSize: 256, format: fmt) { _, _ in }
+        do {
+            try engine.start()
+            print("Microphone: ✓ authorized")
+            engine.stop()
+            input.removeTap(onBus: 0)
+        } catch {
+            print("Microphone: ✗ \(error)")
+        }
+        print("Permissions done. Re-run without --request-permissions to start the daemon.")
+        exit(0)
+    }
+    app.run()
+    exit(0)
 }
 
 // Remove stale socket
@@ -281,11 +340,25 @@ Thread.detachNewThread {
         let n = read(client, &buf, 63)
         if n > 0 {
             let cmd = String(bytes: buf[0..<n], encoding: .utf8) ?? ""
-            DispatchQueue.main.async { handleCommand(cmd) }
+            // Use CFRunLoopPerformBlock with commonModes so it runs even during
+            // NSApplication event tracking (DispatchQueue.main.async is blocked
+            // when NSApp runloop is in .eventTracking mode)
+            CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
+                handleCommand(cmd)
+            }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
         close(client)
     }
 }
 
-// Run main loop (required for Speech framework + CGEvent + NSPanel)
-NSApplication.shared.run()
+// Run main loop — use RunLoop.main instead of NSApplication.shared.run()
+// so that CFRunLoopPerformBlock(.commonModes) and DispatchQueue.main.async
+// are always processed regardless of event tracking mode.
+// NSApplication is still initialized (needed for NSPanel / CGEvent), just not run().
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+// Activate so NSPanel can appear
+app.activate(ignoringOtherApps: false)
+
+RunLoop.main.run()
