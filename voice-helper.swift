@@ -101,36 +101,46 @@ class DictationPillView: NSView {
 
         ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
-        // Mic icon (centered)
-        let micW: CGFloat = 10, micH: CGFloat = 14
-        let mx = (W - micW) / 2
-        let my = (H - micH) / 2
+        // Mic icon — pixel-perfect, centered in pill
+        // Layout (bottom-up, macOS Y-up coords):
+        //   base line  y=my+1
+        //   stand      y=my+1..my+4
+        //   arc        center y=my+9, radius 5, 180°→0° (left→right over top)
+        //   body       y=my+4..my+13 (capsule, 6×9)
+        let cx = W / 2   // horizontal center of pill
+        let my = (H - 14) / 2
         NSColor.white.setFill()
+        NSColor.white.setStroke()
 
-        // Mic body capsule
-        let bodyPath = NSBezierPath(roundedRect: NSRect(x: mx + 2, y: my + 5, width: 6, height: 8), xRadius: 3, yRadius: 3)
+        // Body capsule: 6 wide, 9 tall, top-rounded
+        let bodyPath = NSBezierPath(roundedRect: NSRect(x: cx - 3, y: my + 4, width: 6, height: 9), xRadius: 3, yRadius: 3)
         bodyPath.fill()
 
-        // Mic arc
+        // Arc over the body top (open-bottom U shape = mic pickup)
+        // center at top of body, arc from 0° to 180° counterclockwise = top half circle
         let arcPath = NSBezierPath()
         arcPath.lineWidth = 1.5
-        NSColor.white.setStroke()
-        arcPath.appendArc(withCenter: NSPoint(x: mx + 5, y: my + 12),
-                          radius: 5, startAngle: 0, endAngle: 180, clockwise: true)
+        arcPath.lineCapStyle = .round
+        // appendArc: clockwise=false in macOS = counterclockwise visually (Y-up)
+        // We want a ∩ shape: start at right (0°), sweep to left (180°) going upward
+        arcPath.appendArc(withCenter: NSPoint(x: cx, y: my + 9),
+                          radius: 5, startAngle: 0, endAngle: 180, clockwise: false)
         arcPath.stroke()
 
-        // Mic stand
+        // Stand: vertical line below arc
         let standPath = NSBezierPath()
         standPath.lineWidth = 1.5
-        standPath.move(to: NSPoint(x: mx + 5, y: my + 7))
-        standPath.line(to: NSPoint(x: mx + 5, y: my + 4))
+        standPath.lineCapStyle = .round
+        standPath.move(to: NSPoint(x: cx, y: my + 4))
+        standPath.line(to: NSPoint(x: cx, y: my + 1))
         standPath.stroke()
 
-        // Base line
+        // Base: horizontal line at bottom
         let basePath = NSBezierPath()
         basePath.lineWidth = 1.5
-        basePath.move(to: NSPoint(x: mx + 2, y: my + 4))
-        basePath.line(to: NSPoint(x: mx + 8, y: my + 4))
+        basePath.lineCapStyle = .round
+        basePath.move(to: NSPoint(x: cx - 3, y: my + 1))
+        basePath.line(to: NSPoint(x: cx + 3, y: my + 1))
         basePath.stroke()
 
         // Animated dots: 2 on each side

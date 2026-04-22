@@ -36,29 +36,50 @@ pio run --target upload
 
 Or download a pre-built `.bin` from [Releases](https://github.com/PIGU-PPPgu/open-buddy/releases) and flash with M5Burner.
 
-### 2. Install bridge
+### 2. One-command setup (macOS)
 
 ```bash
+bash setup.sh --device <BLE-UUID>
+```
+
+This single command:
+- Installs the Python bridge (`pip install -e .`)
+- Compiles and installs `voice-helper` (Swift, requires Xcode CLT)
+- Registers both as launchd services (auto-start at login)
+- Installs hooks into all agent configs
+- Triggers the one-time microphone + speech recognition permission dialogs
+
+> **Prerequisites:** macOS, Xcode Command Line Tools (`xcode-select --install`), Python 3.10+
+
+To find your device UUID, run `open-buddy run --device ?` or use a BLE scanner app.
+
+### Manual setup (optional)
+
+<details>
+<summary>Step-by-step without setup.sh</summary>
+
+```bash
+# Install bridge
 pip install open-buddy
-```
 
-### 3. Install agent hooks
+# Install agent hooks
+open-buddy hooks install
 
-```bash
-open-buddy hooks install          # all agents
-open-buddy hooks install --agent cc      # Claude Code only
-open-buddy hooks install --agent codex   # Codex only
-open-buddy hooks install --agent claw    # OpenClaw only
-open-buddy hooks install --agent hermes  # Hermes (prints webhook URL)
-```
-
-### 4. Start bridge
-
-```bash
+# Start bridge
 open-buddy run --device <BLE-UUID>
 ```
 
-To run at login (macOS), add a launchd plist pointing to `open-buddy run --device <UUID>`.
+To run at login, add a launchd plist pointing to `open-buddy run --device <UUID>`.
+
+For voice input, compile and run `voice-helper.swift`:
+```bash
+swiftc -O voice-helper.swift -o ~/.open-buddy/voice-helper \
+  -framework Foundation -framework Speech -framework AVFoundation \
+  -framework AppKit -framework CoreGraphics
+```
+Then load `docs/com.open-buddy.voice-helper.plist` via launchctl.
+
+</details>
 
 ## Agent Support
 
@@ -95,9 +116,16 @@ To run at login (macOS), add a launchd plist pointing to `open-buddy run --devic
 |--------|--------|
 | A (front) | Approve prompt / next screen |
 | B (right side) | Deny prompt / scroll / next page |
+| B double-tap | Toggle voice input (start/stop recording) |
 | Hold A | Menu |
 | Power (short) | Toggle screen |
 | Face down | Nap mode |
+
+## Voice Input
+
+Double-tap the B button to start recording. A green microphone pill appears on screen and a macOS-style overlay shows near the cursor. Double-tap again to stop — the transcribed text is typed into the frontmost app.
+
+Powered by `SFSpeechRecognizer` (on-device, zh-CN by default). Change locale in `voice-helper.swift` line with `SFSpeechRecognizer(locale:)`.
 
 ## Architecture
 
