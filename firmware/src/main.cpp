@@ -641,7 +641,11 @@ void drawInfo() {
     ln("    hold 6s = off");
 
   } else if (infoPage == 2) {
-    _infoHeader(p, y, "CODEX", infoPage);
+    // Show active agent name in header (falls back to "AGENTS" when none)
+    char infoTitle[20];
+    if (tama.agentLabel[0]) snprintf(infoTitle, sizeof(infoTitle), "AGENT: %s", tama.agentLabel);
+    else                    snprintf(infoTitle, sizeof(infoTitle), "AGENTS");
+    _infoHeader(p, y, infoTitle, infoPage);
     spr.setTextColor(p.textDim, p.bg);
     ln("  sessions  %u", tama.sessionsTotal);
     ln("  running   %u", tama.sessionsRunning);
@@ -977,6 +981,13 @@ void drawHUD() {
   const int AREA = SHOW * LH + 4;
   spr.fillRect(0, H - AREA, W, AREA, p.bg);
   spr.setTextSize(1);
+
+  // Agent label: dim, right-aligned, bottom-right corner of HUD
+  if (tama.agentLabel[0]) {
+    spr.setTextColor(p.textDim, p.bg);
+    spr.setCursor(W - (int)strlen(tama.agentLabel) * 6 - 2, H - LH - 1);
+    spr.print(tama.agentLabel);
+  }
 
   if (tama.lineGen != lastLineGen) {
     msgScroll = 0;
