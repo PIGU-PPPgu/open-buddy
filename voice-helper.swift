@@ -240,7 +240,12 @@ func handleCommand(_ cmd: String) {
     if c == "start" {
         recognizer.start { text in
             guard !text.isEmpty else { return }
-            DispatchQueue.main.async { typeString(text) }
+            DispatchQueue.main.async {
+                // Hide overlay first, then wait briefly for focus to return
+                overlay.hide()
+                Thread.sleep(forTimeInterval: 0.15)
+                typeString(text)
+            }
         }
     } else if c == "stop" {
         recognizer.stop()
