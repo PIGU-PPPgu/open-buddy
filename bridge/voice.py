@@ -1,30 +1,36 @@
 """
-Voice input: device double-tap → trigger macOS dictation (Fn Fn).
+Voice input: delegate to voice-helper.py running in GUI session.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 log = logging.getLogger(__name__)
 
+VOICE_SOCK = os.path.expanduser("~/.open-buddy/voice.sock")
+
+
+async def _send(cmd: str) -> None:
+    if not os.path.exists(VOICE_SOCK):
+        log.warning("voice-helper not running (socket missing: %s)", VOICE_SOCK)
+        return
+    try:
+        r, w = await asyncio.open_unix_connection(VOICE_SOCK)
+        w.write(cmd.encode())
+        await w.drain()
+        w.close()
+        await w.wait_closed()
+    except Exception as e:
+        log.warning("voice-helper error: %s", e)
+
 
 async def trigger_macos_dictation() -> None:
-    """Simulate pressing Fn twice to invoke macOS dictation."""
-    script = """
-tell application "System Events"
-    key code 63
-    delay 0.05
-    key code 63
-end tell
-"""
-    proc = await asyncio.create_subprocess_exec(
-        "osascript", "-e", script,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, err = await proc.communicate()
-    if proc.returncode != 0:
-        log.warning("osascript failed: %s", err.decode().strip())
-    else:
-        log.info("macOS dictation triggered")
+    await _send("start")
+    log.info("voice start sent to helper")
+
+
+async def trigger_macos_dictation_stop() -> None:
+    await _send("stop")
+    log.info("voice stop sent to helper")

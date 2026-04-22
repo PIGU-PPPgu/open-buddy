@@ -14,7 +14,7 @@ from .agents.claude_code import ClaudeCodeAdapter
 from .agents.codex import CodexAdapter
 from .agents.openclaw import OpenClawAdapter
 from .agents.hermes import HermesAdapter
-from .voice import trigger_macos_dictation
+from .voice import trigger_macos_dictation, trigger_macos_dictation_stop
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ async def _handle_btn(action: str, ble: BLEBridge) -> None:
     if action == "voice_start":
         await trigger_macos_dictation()
     elif action == "voice_stop":
-        await trigger_macos_dictation()  # second Fn Fn stops dictation
+        await trigger_macos_dictation_stop()
 
 
 def main() -> None:
