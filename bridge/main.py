@@ -41,8 +41,11 @@ async def run(device_id: str) -> None:
                 state, agent, prompt = current
                 state_name = state.name.lower()
                 log.info("state → %s [%s]", state_name, agent or "—")
-                await ble.push_state(state_name, agent, prompt)
-                last_state = current
+                try:
+                    await ble.push_state(state_name, agent, prompt)
+                    last_state = current
+                except Exception as exc:
+                    log.debug("BLE push skipped: %s", exc)
             await asyncio.sleep(POLL_INTERVAL)
     finally:
         for t in adapter_tasks:
